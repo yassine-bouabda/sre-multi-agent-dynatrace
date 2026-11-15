@@ -21,5 +21,3 @@ EXAMPLES:
 - "Check security" → run_vulnerability_scanner only
 - "What's wrong?" → run_problem_finder, then run_root_cause_analyst, then run_mitigation_planner
 - "Full investigation" → run all agents in proper order
-
-Leverage instructions from DynatraceDevOpsIntegration.md
