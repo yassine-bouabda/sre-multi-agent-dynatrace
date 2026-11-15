@@ -1,141 +1,85 @@
-# Dynatrace Multi-Agent System with Pydantic AI
+# SRE Multi-Agent for Dynatrace
 
-Intelligent multi-agent system for Dynatrace monitoring, security, and incident response.
+An LLM-orchestrated team of SRE agents that investigates production incidents and security issues through the [Dynatrace MCP server](https://github.com/dynatrace-oss/dynatrace-mcp). It's built with [Pydantic AI](https://ai.pydantic.dev/).
+
+Ask a question in plain English ("Why is the payment service slow? Fix it"). An **orchestrator agent** decides which specialist agents to call and in what order, then combines their structured findings into one answer.
 
 ## 🏗️ Architecture
 
-The system uses an **LLM Orchestrator** that intelligently decides which specialist agents to call:
+```mermaid
+flowchart TD
+    U[User query] --> O[Orchestrator Agent<br/>plans & delegates]
+    O -->|health check| P[Problem Finder]
+    O -->|security scan| V[Vulnerability Agent]
+    O -->|after problems found| R[Root Cause Agent<br/>exception-first]
+    O -->|last: synthesize| M[Mitigation Agent]
+    O -.->|needs context| F[Ask user for feedback]
+    P & V & R --> MCP[(Dynatrace MCP server<br/>problems · security events · DQL)]
+    P & V & R -->|findings| CTX[Shared context]
+    CTX --> M
+    M --> O
+```
 
-- **Orchestrator Agent** (LLM) - Decides which agents to call based on user intent
-  - **Problem Finder Agent** - Health check and incident detection
-  - **Vulnerability Agent** - Security scanning and compliance
-  - **Root Cause Agent** - Deep dive investigation with Exception-First workflow
-  - **Mitigation Agent** - Actionable plans with immediate and long-term fixes
+| Agent | Role | Output |
+|---|---|---|
+| **Orchestrator** | Understands intent, chooses which agents to call (Problem Finder and Vulnerability can run in parallel; Root Cause after problems are found; Mitigation last) | Summary, findings, recommendations |
+| **Problem Finder** | Scans for active `DAVIS_PROBLEM` events and affected services | Problems, services, severity |
+| **Vulnerability Agent** | Queries security events for CVEs, risk scores and compliance rules | Vulnerabilities, affected entities, risk score |
+| **Root Cause Agent** | Exception-first deep dive: span exceptions → stack traces → correlated logs | Root cause, exception, correlated logs |
+| **Mitigation Agent** | Combines all previous findings into a plan | Immediate actions, automation triggers, long-term fixes, prevention |
 
-## 🚀 Quick Start
+**Design choices**
+- **The LLM does the routing.** There are no hardcoded rules: each specialist agent is exposed to the orchestrator as a tool.
+- **Structured outputs.** Every agent returns a Pydantic model (or an explicit `Failed` reason), so the results can be composed safely.
+- **Shared context.** Findings from earlier agents are passed to the Mitigation Agent.
+- **Prompts live in plain text** in [`instructions/`](instructions/), so they're easy to edit and version.
+- **Per-agent model config.** A stronger model orchestrates and cheaper models do the specialist work (see `config.py`).
 
-### 1. Install Dependencies
+## 🚀 Quick start
+
+Requirements: Python 3.10+, Node.js (the Dynatrace MCP server runs via `npx`), a Dynatrace environment, and an OpenAI or Anthropic API key.
+
 ```bash
 pip install -r requirements.txt
+cp .env.example .env      # fill in your API key and Dynatrace credentials
+python main.py            # run from the repo root
 ```
 
-### 2. Configure Models
-```bash
-# Copy example config
-cp config.example.py config.py
+Models are set in [`config.py`](config.py). By default `gpt-4o` orchestrates and `gpt-4o-mini` runs the specialists. Any [Pydantic AI model string](https://ai.pydantic.dev/models/) works (e.g. `anthropic:<model-name>`).
 
-# Edit config.py to set your preferred models
-# Default: OpenAI GPT-4o for orchestrator, GPT-4o-mini for agents
-```
-
-### 3. Set API Key
-```bash
-export OPENAI_API_KEY="sk-your-key-here"
-# or
-export ANTHROPIC_API_KEY="your-key-here"
-```
-
-### 4. Configure MCP (Optional)
-```bash
-# Create dynatrace_mcp_config.json with your Dynatrace MCP settings
-# See agents/dynatrace_mcp_config.json for example
-```
-
-### 5. Run
-```bash
-# Interactive chat
-python main.py
-
-# Run demo
-python demo.py
-```
-
-## 📁 Project Structure
-
-```
-dynatrace/
-├── config.py                     # Model configurations (created from config.example.py)
-├── config.example.py             # Example configuration
-├── main.py                       # Chat interface
-├── demo.py                       # Demo with example queries
-├── orchestrator.py               # Orchestrator Agent (LLM)
-├── moderator.py                  # Pass-through
-├── memory_updater.py             # Pass-through
-├── utils.py                      # Helper functions (load prompts)
-├── agents/
-│   ├── problem_finder_agent.py  # Health check agent
-│   ├── vulnerability_agent.py   # Security scanner agent
-│   ├── root_cause_agent.py      # Deep investigation agent
-│   └── mitigation_agent.py      # Action plan agent
-└── instructions/
-    ├── orchestrator_prompt.txt
-    ├── problem_finder_prompt.txt
-    ├── vulnerability_agent_prompt.txt
-    ├── root_cause_agent_prompt.txt
-    └── mitigation_agent_prompt.txt
-```
-
-## 🎯 Key Features
-
-✅ **Intelligent Orchestration** - LLM decides which agents to call  
-✅ **Structured Output** - Pydantic models for all responses  
-✅ **MCP Integration** - Direct connection to Dynatrace tools  
-✅ **Configurable Models** - Easy to swap AI models via config.py  
-✅ **External Prompts** - All system prompts in instructions/ folder  
-✅ **Minimal & Clean** - Simple, maintainable codebase  
-
-## 🔧 Configuration
-
-All configuration is centralized in `config.py`:
-
-```python
-# Model configurations
-ORCHESTRATOR_AGENT_MODEL = "openai:gpt-4o"
-PROBLEM_FINDER_AGENT_MODEL = "openai:gpt-4o-mini"
-# ... etc
-
-# MCP Configuration
-MCP_CONFIG_FILE = "dynatrace_mcp_config.json"
-
-# Usage limits
-REQUEST_LIMIT = 20
-```
-
-## 💬 Example Usage
+## 💬 Example
 
 ```
 You: Are there any problems in production?
-→ Orchestrator calls: Problem Finder only
+→ Orchestrator calls: Problem Finder
 
 You: Check for security vulnerabilities
-→ Orchestrator calls: Vulnerability Scanner only
+→ Orchestrator calls: Vulnerability Agent
 
 You: Why is the payment service slow? Fix it
 → Orchestrator calls: Problem Finder → Root Cause → Mitigation
 
 You: Full security and health audit
-→ Orchestrator calls: All agents in optimal order
+→ Orchestrator calls: Problem Finder + Vulnerability → Root Cause → Mitigation
 ```
 
-## 🎨 Design Principles
+## 📁 Project structure
 
-- **Minimal** - Each component is simple and focused
-- **Configurable** - Models and settings in config.py
-- **Visible** - System prompts in instructions/ folder
-- **Modular** - Each agent is independent
-- **Intelligent** - LLM-based orchestration (no hardcoded rules)
+```
+├── main.py                    # Interactive chat loop
+├── orchestrator.py            # Orchestrator agent + specialist agents as tools
+├── agents/                    # Problem Finder, Vulnerability, Root Cause, Mitigation
+├── instructions/              # System prompts (one .txt per agent)
+├── config.py                  # Models, credentials (from .env), request limit
+├── dynatrace_mcp_config.json  # Dynatrace MCP server launch config
+├── moderator.py               # Input moderation hook (pass-through for now)
+└── memory_updater.py          # Memory hook (pass-through for now)
+```
 
-## 📚 Documentation
+## 🗺️ Roadmap
+- Long-term memory across sessions (`memory_updater.py`)
+- Input guardrails (`moderator.py`)
+- Evaluating agent answers with LLM-as-judge
 
-- See `README_ARCHITECTURE.md` for detailed architecture
-- See `instructions/README.md` for prompt management
-
-## 🔌 MCP Tools
-
-Agents automatically connect to Dynatrace MCP tools:
-- `list_problems` - Query DAVIS_PROBLEM events
-- `list_vulnerabilities` - Query security.events
-- `execute_dql` - Custom DQL queries
-- And more...
-
-Configure MCP in `dynatrace_mcp_config.json`
+## ⚠️ Disclaimer
+Personal project, not an official Dynatrace product. Mitigation plans are suggestions: the agents investigate but do not run remediation.
