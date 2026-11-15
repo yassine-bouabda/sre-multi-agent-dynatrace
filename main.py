@@ -40,9 +40,8 @@ async def main():
         moderated = moderate(user_input)
         
         # Orchestrator agent decides what to do (async)
+        # Context is updated in place by the orchestrator's tools
         response = await orchestrate(moderated, context)
-
-        context+=respone
         
         # Memory updater (pass-through)
         update_memory(user_input, response)
